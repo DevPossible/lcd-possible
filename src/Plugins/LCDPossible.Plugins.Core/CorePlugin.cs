@@ -153,12 +153,20 @@ public sealed class CorePlugin : IPanelPlugin
             Category = "System",
             IsLive = true
         },
-        ["new-components-demo"] = new PanelTypeInfo
+["new-components-demo"] = new PanelTypeInfo
         {
             TypeId = "new-components-demo",
             DisplayName = "New Components Demo",
             Description = "Demo panel for ECharts and DaisyUI components",
             Category = "Demo",
+            IsLive = true
+        },
+        ["cpu-usage-debug"] = new PanelTypeInfo
+        {
+            TypeId = "cpu-usage-debug",
+            DisplayName = "CPU Usage Debug",
+            Description = "Debug panel for Linux CPU usage calculation",
+            Category = "Debug",
             IsLive = true
         }
     };
@@ -203,8 +211,9 @@ public sealed class CorePlugin : IPanelPlugin
             "cpu-thermal-graphic" => new CpuThermalGraphicPanel(provider),
             "gpu-thermal-graphic" => new GpuThermalGraphicPanel(provider),
             "system-thermal-graphic" => new SystemThermalGraphicPanel(provider),
-            "network-info" => new NetworkWidgetPanel(),
+"network-info" => new NetworkWidgetPanel(),
             "new-components-demo" => new NewComponentsDemoPanel(provider),
+            "cpu-usage-debug" => new CpuUsageDebugPanel(),
             _ => null
         };
 

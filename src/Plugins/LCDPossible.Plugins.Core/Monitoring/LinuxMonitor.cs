@@ -24,14 +24,14 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
     public string PlatformName => "Linux";
     public bool IsAvailable { get; private set; }
 
-    public Task InitializeAsync(CancellationToken cancellationToken = default)
+public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             // Get CPU info
             if (File.Exists("/proc/cpuinfo"))
             {
-                var cpuInfo = File.ReadAllText("/proc/cpuinfo");
+                var cpuInfo = await File.ReadAllTextAsync("/proc/cpuinfo", cancellationToken);
                 var modelMatch = ModelNameRegex().Match(cpuInfo);
                 if (modelMatch.Success)
                 {
@@ -41,6 +41,9 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
                 _cpuCoreCount = ProcessorCountRegex().Matches(cpuInfo).Count;
                 if (_cpuCoreCount == 0) _cpuCoreCount = Environment.ProcessorCount;
             }
+
+            // Initialize CPU usage tracking by taking first sample
+            await InitializeCpuUsageTrackingAsync(cancellationToken);
 
             // Check for GPU tools
             _hasNvidiaSmi = CanRunCommand("nvidia-smi", "--version");
@@ -56,8 +59,56 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
         {
             IsAvailable = false;
         }
+    }
 
-        return Task.CompletedTask;
+    private async Task InitializeCpuUsageTrackingAsync(CancellationToken cancellationToken)
+    {
+        // Take first sample of CPU stats to establish baseline for delta calculation
+        if (File.Exists("/proc/stat"))
+        {
+            var statLines = await File.ReadAllLinesAsync("/proc/stat", cancellationToken);
+            var cpuLine = statLines.FirstOrDefault(l => l.StartsWith("cpu "));
+
+            if (cpuLine != null)
+            {
+                var parts = cpuLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 5)
+                {
+                    var user = long.Parse(parts[1], CultureInfo.InvariantCulture);
+                    var nice = long.Parse(parts[2], CultureInfo.InvariantCulture);
+                    var system = long.Parse(parts[3], CultureInfo.InvariantCulture);
+                    var idle = long.Parse(parts[4], CultureInfo.InvariantCulture);
+                    var iowait = parts.Length > 5 ? long.Parse(parts[5], CultureInfo.InvariantCulture) : 0;
+
+                    _lastTotalJiffies = user + nice + system + idle + iowait;
+                    _lastIdleJiffies = idle + iowait;
+                }
+            }
+
+            // Initialize per-core tracking
+            var coreLines = statLines.Where(l => CpuCoreLineRegex().IsMatch(l)).ToList();
+            if (coreLines.Count > 0)
+            {
+                _lastCoreTotal = new long[coreLines.Count];
+                _lastCoreIdle = new long[coreLines.Count];
+
+                for (int i = 0; i < coreLines.Count; i++)
+                {
+                    var parts = coreLines[i].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 5)
+                    {
+                        var user = long.Parse(parts[1], CultureInfo.InvariantCulture);
+                        var nice = long.Parse(parts[2], CultureInfo.InvariantCulture);
+                        var system = long.Parse(parts[3], CultureInfo.InvariantCulture);
+                        var idle = long.Parse(parts[4], CultureInfo.InvariantCulture);
+                        var iowait = parts.Length > 5 ? long.Parse(parts[5], CultureInfo.InvariantCulture) : 0;
+
+                        _lastCoreTotal[i] = user + nice + system + idle + iowait;
+                        _lastCoreIdle[i] = idle + iowait;
+                    }
+                }
+            }
+        }
     }
 
     public async Task<SystemMetrics?> GetMetricsAsync(CancellationToken cancellationToken = default)
@@ -106,7 +157,7 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
                     var total = user + nice + system + idle + iowait;
                     var idleTotal = idle + iowait;
 
-                    if (_lastTotalJiffies > 0)
+if (_lastTotalJiffies > 0)
                     {
                         var totalDelta = total - _lastTotalJiffies;
                         var idleDelta = idleTotal - _lastIdleJiffies;
@@ -114,6 +165,14 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
                         if (totalDelta > 0)
                         {
                             cpu.UsagePercent = (float)(100.0 * (totalDelta - idleDelta) / totalDelta);
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: use current snapshot as an estimate (not as accurate but better than 0)
+                        if (total > 0)
+                        {
+                            cpu.UsagePercent = (float)(100.0 * (total - idleTotal) / total);
                         }
                     }
 
@@ -143,7 +202,7 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
                         var total = user + nice + system + idle + iowait;
                         var idleTotal = idle + iowait;
 
-                        if (_lastCoreTotal[i] > 0)
+if (_lastCoreTotal[i] > 0)
                         {
                             var totalDelta = total - _lastCoreTotal[i];
                             var idleDelta = idleTotal - _lastCoreIdle[i];
@@ -151,6 +210,14 @@ internal sealed partial class LinuxMonitor : IPlatformMonitor
                             if (totalDelta > 0)
                             {
                                 cpu.CoreUsages.Add((float)(100.0 * (totalDelta - idleDelta) / totalDelta));
+                            }
+                        }
+                        else
+                        {
+                            // Fallback: use current snapshot as an estimate
+                            if (total > 0)
+                            {
+                                cpu.CoreUsages.Add((float)(100.0 * (total - idleTotal) / total));
                             }
                         }
 

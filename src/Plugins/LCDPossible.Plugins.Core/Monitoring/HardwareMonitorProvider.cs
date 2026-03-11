@@ -43,12 +43,20 @@ public sealed class HardwareMonitorProvider : ISystemInfoProvider
         }
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             await _platformMonitor.InitializeAsync(cancellationToken);
             IsAvailable = _platformMonitor.IsAvailable;
+
+            // For Linux, take a warmup reading to establish CPU usage baseline
+            if (IsAvailable && _platformMonitor is LinuxMonitor)
+            {
+                await _platformMonitor.GetMetricsAsync(cancellationToken);
+                // Small delay to ensure we get a meaningful delta on the first real call
+                await Task.Delay(100, cancellationToken);
+            }
         }
         catch
         {
